@@ -1,0 +1,12 @@
+APExpress24 - Sopralluogo APE (app web installabile)
+
+CONTENUTO
+index.html, app.js, style.css, sw.js, manifest.webmanifest, cartelle lib/ e icons/.
+Va pubblicata tutta insieme, in una cartella raggiungibile via HTTPS (es. /sopralluogo/).
+
+INSTALLAZIONE SUL TELEFONO
+- iPhone/iPad (Safari): Condividi > "Aggiungi alla schermata Home"
+- Android (Chrome): menu > "Installa app"
+
+AGGIORNAMENTI: dopo ogni modifica cambia VERSION in sw.js.
+I dati delle pratiche restano sul dispositivo finché non si esporta il pacchetto.
