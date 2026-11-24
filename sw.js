@@ -8,7 +8,7 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then(c => Promise.all(ASSETS.map(u => fetch(new Request(u, { cache: 'reload' })).then(r => { if (r.ok) return c.put(u, r); })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -18,17 +18,22 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Cache subito, aggiornamento in background (la versione nuova appare alla riapertura successiva).
+// Rete per prima (con attesa massima di 4 secondi), cache come riserva: online l'app è sempre aggiornata, offline funziona dalla cache.
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
-  e.respondWith(
-    caches.match(req, { ignoreSearch: true }).then(cached => {
-      const net = fetch(req).then(res => {
-        if (res && res.ok) { const copy = res.clone(); caches.open(VERSION).then(c => c.put(req, copy)); }
-        return res;
-      }).catch(() => cached || (req.mode === 'navigate' ? caches.match('./index.html') : undefined));
-      return cached || net;
-    })
-  );
+  e.respondWith((async () => {
+    const cache = await caches.open(VERSION);
+    try {
+      const res = await Promise.race([
+        fetch(req, { cache: 'no-cache' }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))
+      ]);
+      if (res && res.ok) cache.put(req, res.clone());
+      return res;
+    } catch {
+      const cached = await cache.match(req, { ignoreSearch: true });
+      return cached || (req.mode === 'navigate' ? cache.match('./index.html') : Response.error());
+    }
+  })());
 });
