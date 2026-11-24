@@ -100,8 +100,8 @@ const STEPS = [
   { t: 'Riscaldamento e generatore', d: 'Tipo di impianto e dati della caldaia / pompa di calore. Fotografa targa e libretto.', rows: [...rowsOf('s4', [0, 1, 2]), { media: ['targa_gen', 'libretto'] }] },
   { t: 'Terminali, ACS e climatizzatori', d: 'Radiatori, acqua calda sanitaria, split.', rows: [...rowsOf('s4', [3, 4, 5]), { media: ['targa_split'] }] },
   { t: 'Isolamento e rinnovabili', d: 'Cappotto, fotovoltaico, solare termico, VMC.', rows: rowsOf('s5', [0, 1]) },
-  { t: 'Sopralluogo', d: 'Chi dà accesso, quando, e note particolari. Foto e video generali.', rows: [...rowsOf('s5', [2, 3]), { media: ['altro', 'video'] }] },
-  { t: 'Firma e riepilogo', d: 'Controlla, fai firmare e genera il pacchetto per il certificatore.', final: true, rows: [] }
+  { t: 'Sopralluogo', d: 'Chi dà accesso, quando, e note particolari. Foto generali.', rows: [...rowsOf('s5', [2, 3]), { media: ['altro'] }] },
+  { t: 'Video, firma e riepilogo', d: 'Video finale del sopralluogo, firma e pacchetto per il certificatore.', final: true, rows: [] }
 ];
 
 const CATS = {
@@ -261,9 +261,10 @@ async function delPratica(p) {
   renderHome();
 }
 async function newPratica() {
-  const p = { id: uid(), created: new Date().toISOString(), updated: new Date().toISOString(), d: { data_firma: today() }, nmedia: 0 };
+  const p = { id: uid(), created: new Date().toISOString(), updated: new Date().toISOString(), d: { data_firma: today(), data_sopralluogo: new Date().toISOString() }, nmedia: 0 };
   await dbPut('pratiche', p);
-  openPratica(p.id);
+  await openPratica(p.id);
+  rilevaPosizione(true);
   try { navigator.storage?.persist?.(); } catch {}
 }
 async function openPratica(id) {
@@ -271,6 +272,69 @@ async function openPratica(id) {
   media = (await mediaOf(id)).sort((a, b) => a.ts - b.ts);
   step = Math.min(cur.step || 0, STEPS.length - 1);
   renderEditor();
+}
+
+
+/* ───────────── posizione e data del sopralluogo ───────────── */
+const GEO_NOTE = 'L’app rileva la tua posizione una sola volta per scrivere nella scheda l’indirizzo esatto e la data/ora del sopralluogo. Le coordinate restano nella pratica sul tuo dispositivo e finiscono nel pacchetto per il certificatore. Per ricavare l’indirizzo, se sei online, le coordinate vengono inviate al servizio OpenStreetMap.';
+function getPos() {
+  return new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }));
+}
+async function reverseGeo(lat, lon) {
+  const r = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&accept-language=it&zoom=18&lat=' + lat + '&lon=' + lon);
+  if (!r.ok) throw new Error('geocoding');
+  const j = await r.json(), a = j.address || {};
+  const via = [a.road || a.pedestrian || a.footway || a.path, a.house_number].filter(Boolean).join(' ');
+  const comune = a.city || a.town || a.village || a.municipality || '';
+  const prov = ((a['ISO3166-2-lvl6'] || '').split('-')[1] || '').toUpperCase();
+  return { via, comune, prov, cap: a.postcode || '', full: j.display_name || '' };
+}
+let geoBusy = false;
+async function rilevaPosizione(auto) {
+  if (!cur || geoBusy) return;
+  if (!navigator.geolocation) { if (!auto) toast('Posizione non disponibile su questo dispositivo.'); return; }
+  let consent = ''; try { consent = localStorage.getItem('geoConsent') || ''; } catch {}
+  if (consent !== 'ok') {
+    if (consent === 'no' && auto) return;
+    if (!confirm(GEO_NOTE + '\n\nVuoi consentire il rilevamento della posizione?')) { try { localStorage.setItem('geoConsent', 'no'); } catch {} if (!auto) toast('Rilevamento posizione non consentito.'); return; }
+    try { localStorage.setItem('geoConsent', 'ok'); } catch {}
+  }
+  geoBusy = true; paintGeo('Rilevo la posizione…');
+  const id = cur.id;
+  try {
+    const pos = await getPos();
+    if (!cur || cur.id !== id) return;
+    const { latitude: lat, longitude: lon, accuracy } = pos.coords;
+    const d = cur.d;
+    d.geo_lat = lat.toFixed(6); d.geo_lon = lon.toFixed(6); d.geo_acc = String(Math.round(accuracy));
+    d.data_sopralluogo = new Date(pos.timestamp || Date.now()).toISOString();
+    d.geo_indirizzo = '';
+    try {
+      const g = await reverseGeo(lat, lon);
+      if (!cur || cur.id !== id) return;
+      d.geo_indirizzo = g.full;
+      if (g.via && !filled(d.indirizzo)) d.indirizzo = g.via;
+      if (g.comune && !filled(d.comune)) d.comune = g.comune;
+      if (g.prov && !filled(d.prov)) d.prov = g.prov;
+      if (g.cap && !filled(d.cap)) d.cap = g.cap;
+    } catch { /* offline: restano le coordinate */ }
+    scheduleSave();
+    toast(d.geo_indirizzo ? 'Posizione rilevata.' : 'Coordinate salvate (indirizzo non disponibile offline).');
+  } catch (e) {
+    if (auto) toast('Posizione non rilevata: puoi riprovare dal passo “Immobile”.');
+    else toast(e && e.code === 1 ? 'Permesso negato: abilita la posizione per questa app nelle impostazioni.' : 'Posizione non rilevata, riprova all’aperto.');
+  } finally { geoBusy = false; if (cur && cur.id === id && step === 1) renderEditor(); }
+}
+function paintGeo(msg) { const e = $('#geo'); if (e) e.textContent = msg; }
+function geoPanel() {
+  const d = cur.d;
+  const has = d.geo_lat && d.geo_lon;
+  return h('div', { class: 'row', style: 'padding:10px 14px' },
+    h('div', { class: 'rl' }, '📍 Posizione e data'),
+    h('p', { class: 'hint', id: 'geo', style: 'margin:4px 0 8px' }, has
+      ? 'Sopralluogo del ' + fmtDT(d.data_sopralluogo) + (d.geo_indirizzo ? ' – ' + d.geo_indirizzo : '') + ' (' + d.geo_lat + ', ' + d.geo_lon + ', precisione ±' + d.geo_acc + ' m)'
+      : 'Data e ora: ' + fmtDT(d.data_sopralluogo) + '. Posizione non ancora rilevata.'),
+    h('button', { class: 'btn small pri', onclick: () => rilevaPosizione(false) }, has ? '🔄 Aggiorna posizione' : '📍 Rileva posizione'));
 }
 
 /* ───────────── Editor ───────────── */
@@ -308,7 +372,7 @@ function stepMenu() {
 function renderEditor() {
   panels.length = 0;
   const st = STEPS[step], last = !!st.final;
-  const body = last ? finalStep() : h('section', { class: 'sec' }, ...st.rows.map(r => r.media ? mediaPanel(r.media) : renderRow(r)));
+  const body = last ? finalStep() : h('section', { class: 'sec' }, step === 1 ? geoPanel() : null, ...st.rows.map(r => r.media ? mediaPanel(r.media) : renderRow(r)));
   app.replaceChildren(
     h('div', { class: 'hdr' },
       h('button', { class: 'ibtn', 'aria-label': 'Torna all’elenco', onclick: async () => { await saveNow(); renderHome(); } }, '‹ Elenco'),
@@ -337,6 +401,12 @@ function finalStep() {
             h('span', {}, (i + 1) + '. ' + st.t), h('span', { class: 'badge', style: x.ok === x.tot ? 'background:#dff3e8;color:#1f6b43' : '' }, x.tot ? x.ok + '/' + x.tot : '—')); }),
         h('p', { class: 'hint', id: 'missing', style: 'margin:10px 0 0' }, ''),
         h('p', { class: 'hint', style: 'margin:4px 0 0' }, '📎 Allegati: ' + media.length + ' (foto, video, documenti)'))),
+    h('section', { class: 'sec' }, h('h2', {}, h('span', {}, 'Video finale del sopralluogo')),
+      h('div', { style: 'padding:6px 14px 4px' },
+        h('p', { class: 'hint', style: 'margin:0 0 6px' }, 'Facoltativo. Registra un video di 1-3 minuti camminando nell’immobile e raccontando a voce quello che inquadri:'),
+        h('ol', { class: 'hint', style: 'margin:0 0 8px;padding-left:20px' },
+          ...['Esterno e facciate: orientamento, cappotto, stato dell’involucro', 'Ingresso e locali principali: finestre e serramenti (vetro, telaio)', 'Generatore: caldaia o pompa di calore, targa e libretto', 'Terminali: radiatori, pannelli, split e climatizzatori', 'Acqua calda sanitaria, fotovoltaico, solare termico, VMC', 'Eventuali particolarità o criticità'].map(t => h('li', {}, t)))),
+      mediaPanel(['video'])),
     h('section', { class: 'sec' }, h('h2', {}, h('span', {}, 'Conferma e firma')),
       h('div', { style: 'padding:14px' },
         h('p', { class: 'hint', style: 'margin-top:0' }, CONFERMA),
@@ -484,6 +554,12 @@ function flatData() {
     if (f.x && v === f.x.on && cur.d[f.x.k]) val += ' (' + cur.d[f.x.k] + ')';
     out.push({ sezione: s.t, campo: labelOf(f), chiave: f.k, valore: val });
   })));
+  const dd = cur.d;
+  out.push({ sezione: 'Sopralluogo', campo: 'Data e ora sopralluogo', chiave: 'data_sopralluogo', valore: dd.data_sopralluogo || '' });
+  out.push({ sezione: 'Sopralluogo', campo: 'Latitudine', chiave: 'geo_lat', valore: dd.geo_lat || '' });
+  out.push({ sezione: 'Sopralluogo', campo: 'Longitudine', chiave: 'geo_lon', valore: dd.geo_lon || '' });
+  out.push({ sezione: 'Sopralluogo', campo: 'Precisione (m)', chiave: 'geo_acc', valore: dd.geo_acc || '' });
+  out.push({ sezione: 'Sopralluogo', campo: 'Indirizzo rilevato', chiave: 'geo_indirizzo', valore: dd.geo_indirizzo || '' });
   out.push({ sezione: 'Firma', campo: 'Data', chiave: 'data_firma', valore: cur.d.data_firma || '' });
   return out;
 }
@@ -542,7 +618,14 @@ async function buildPdf() {
   doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(...NAVY); doc.text('SCHEDA RACCOLTA DATI APE', W / 2, y, { align: 'center' });
   doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(60);
   doc.text('Raccolta dati per attestato di prestazione energetica - Regione Lombardia', W / 2, y + 4.6, { align: 'center' });
-  y += 10;
+  y += 8;
+  {
+    const dd = cur.d;
+    const t = 'Sopralluogo del ' + (dd.data_sopralluogo ? new Date(dd.data_sopralluogo).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }).replace(',', ' ore') : '____________') +
+      (dd.geo_lat ? ' - Posizione rilevata: ' + (dd.geo_indirizzo ? dd.geo_indirizzo + ' ' : '') + '(' + dd.geo_lat + ', ' + dd.geo_lon + ', precisione +/-' + dd.geo_acc + ' m)' : ' - Posizione non rilevata');
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(60);
+    const ls = doc.splitTextToSize(t, W - 2 * M); doc.text(ls, W / 2, y, { align: 'center' }); y += ls.length * 3.4 + 3;
+  }
 
   const ensure = hh => { if (y + hh > BOTTOM) { doc.addPage(); y = 14; } };
   const tokensOf = row => {

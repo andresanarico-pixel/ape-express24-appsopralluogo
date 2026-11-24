@@ -1,6 +1,6 @@
 // Service worker: l'app funziona offline dopo la prima apertura.
 // Per pubblicare una nuova versione cambia VERSION.
-const VERSION = 'apexpress24-ape-v1';
+const VERSION = 'apexpress24-ape-v2';
 const ASSETS = [
   './', './index.html', './app.js', './style.css', './manifest.webmanifest',
   './lib/jszip.min.js', './lib/jspdf.umd.min.js',
