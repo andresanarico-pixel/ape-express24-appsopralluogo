@@ -20,7 +20,7 @@ const SCHEMA = [
       { k: 'prov', p: 'Prov.', cap: 'characters', up: 1 },
       { k: 'cap', p: 'CAP', im: 'numeric', cap: 'none' } ] },
     { l: 'Catasto / uso', f: [
-      { k: 'fg', p: 'Foglio', cap: 'none' }, { k: 'mapp', p: 'Mappale', cap: 'none' },
+      { k: 'sez', p: 'Sez. urbana', cap: 'characters', up: 1 }, { k: 'fg', p: 'Foglio', cap: 'none' }, { k: 'mapp', p: 'Mappale', cap: 'none' },
       { k: 'sub', p: 'Sub.', cap: 'none' }, { k: 'piano', p: 'Piano / interno', cap: 'none' },
       { k: 'categoria', p: 'Categoria catastale', cap: 'characters', up: 1 }, { k: 'classe', p: 'Classe', cap: 'characters', up: 1 },
       { k: 'consistenza', p: 'Consistenza', cap: 'none' }, { k: 'sup_cat', p: 'Superficie catastale m²', im: 'decimal', cap: 'none' },
@@ -28,7 +28,10 @@ const SCHEMA = [
       { k: 'destinazione', p: 'Destinazione d’uso' } ] },
     { l: 'Finalità / fabbricato', f: [
       { k: 'finalita', p: 'Finalità', t: 'radio', o: ['Vendita', 'Locazione', 'Fine lavori', 'Altro'], x: { k: 'finalita_altro', on: 'Altro', p: 'Specificare' } },
-      { k: 'anno_costr', p: 'Anno costruzione', im: 'numeric', cap: 'none' } ] } ] },
+      { k: 'anno_costr', p: 'Anno costruzione', im: 'numeric', cap: 'none' },
+      { k: 'num_piani', p: 'N. piani edificio', im: 'numeric', cap: 'none' },
+      { k: 'num_uiu', p: 'N. unità immobiliari (UIU)', im: 'numeric', cap: 'none' },
+      { k: 'data_commessa', p: 'Data commessa', t: 'date' } ] } ] },
 
   { id: 's2', t: '2. Documentazione da allegare, se disponibile', rows: [
     { l: 'Catasto / edificio', f: [
@@ -343,7 +346,7 @@ function geoPanel() {
 }
 
 /* ───────────── dati catastali da visura / planimetria ───────────── */
-const CAT_LABEL = { fg: 'Foglio', mapp: 'Mappale', sub: 'Sub.', categoria: 'Categoria', classe: 'Classe', consistenza: 'Consistenza', sup_cat: 'Superficie catastale m²', rendita: 'Rendita (euro)', zona_cens: 'Zona censuaria', piano: 'Piano', indirizzo: 'Indirizzo', comune: 'Comune' };
+const CAT_LABEL = { sez: 'Sez. urbana', fg: 'Foglio', mapp: 'Mappale', sub: 'Sub.', categoria: 'Categoria', classe: 'Classe', consistenza: 'Consistenza', sup_cat: 'Superficie catastale m²', rendita: 'Rendita (euro)', zona_cens: 'Zona censuaria', piano: 'Piano', indirizzo: 'Indirizzo', comune: 'Comune' };
 function catastoPanel() {
   const n = media.filter(m => m.cat === 'visura' || m.cat === 'planimetria').length;
   return h('div', { class: 'row', style: 'padding:10px 14px' },
@@ -379,6 +382,8 @@ function importCatasto(cat) {
     const diff = keys.filter(k => filled(cur.d[k]) && String(cur.d[k]).trim().toLowerCase() !== String(found[k]).toLowerCase());
     const over = diff.length ? confirm('Alcuni campi sono già compilati e sono diversi:\n' + diff.map(k => '• ' + CAT_LABEL[k] + ': ' + cur.d[k] + ' → ' + found[k]).join('\n') + '\n\nSovrascrivere con i dati del documento?') : false;
     keys.forEach(k => { if (!filled(cur.d[k]) || over) cur.d[k] = found[k]; });
+    const ci = window.comuneInfo && window.comuneInfo(cur.d.comune);
+    if (ci) { if (!filled(cur.d.prov)) cur.d.prov = ci.prov; if (!filled(cur.d.cap) && ci.cap) cur.d.cap = ci.cap; }
     scheduleSave(); renderEditor();
     toast('Importati: ' + keys.map(k => CAT_LABEL[k]).join(', ') + '. Controlla i valori.');
   });
@@ -637,6 +642,8 @@ async function buildZip(onProg) {
     });
   }
   zip.file(root + '/dati_pratica.xml', buildXml());
+  zip.file(root + '/Info_APE.txt', window.Termolog.buildInfoApe(cur.d));
+  zip.file(root + '/Termolog_CENED_datiInput_SPERIMENTALE.xml', window.Termolog.buildCenedXml(cur.d, window.comuneInfo(cur.d.comune)));
   zip.file(root + '/dati_pratica.json', JSON.stringify(json, null, 2));
   zip.file(root + '/dati_pratica.csv', csv);
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 }, streamFiles: true },
@@ -814,7 +821,7 @@ async function openExport() {
   const actions = h('div', { style: 'display:grid;gap:10px;margin-top:8px' });
   const ov = h('div', { class: 'overlay', onclick: e => { if (e.target === ov) ov.remove(); } },
     h('div', { class: 'sheet' }, h('h3', {}, 'Pacchetto per il certificatore'),
-      h('p', { class: 'hint', style: 'margin:0' }, 'Contiene la scheda PDF compilata, i dati (XML, JSON e CSV) e tutti gli allegati in cartelle ordinate.'),
+      h('p', { class: 'hint', style: 'margin:0' }, 'Contiene la scheda PDF compilata, i dati (Info_APE.txt, XML, JSON e CSV) e tutti gli allegati in cartelle ordinate.'),
       h('div', { class: 'pbar' }, bar), msg, actions));
   document.body.append(ov);
   try {
@@ -827,7 +834,9 @@ async function openExport() {
     if (canShare) actions.append(h('button', { class: 'btn pri block', onclick: async () => { try { await navigator.share({ files: [file], title: 'Scheda APE – ' + title(cur) }); } catch (e) { if (e.name !== 'AbortError') toast('Condivisione non riuscita: usa Scarica'); } } }, '📤  Invia / Condividi (mail, WhatsApp, AirDrop, Drive…)'));
     actions.append(h('button', { class: 'btn block' + (canShare ? '' : ' pri'), onclick: () => download(blob, name) }, '⬇️  Scarica ZIP'));
     actions.append(h('button', { class: 'btn block', onclick: async () => { const pdf = await buildPdf(); download(pdf, baseName() + '_scheda.pdf'); } }, '📄  Scarica solo la scheda PDF'));
-    actions.append(h('button', { class: 'btn block', onclick: () => download(new Blob([buildXml()], { type: 'application/xml' }), baseName() + '.xml') }, '🧾  Scarica solo l’XML (Termolog)'));
+    actions.append(h('button', { class: 'btn block', onclick: () => download(new Blob([window.Termolog.buildInfoApe(cur.d)], { type: 'text/plain' }), 'Info_APE_' + baseName() + '.txt') }, '📝  Scarica Info_APE.txt (per Termolog)'));
+    actions.append(h('button', { class: 'btn block', onclick: () => download(new Blob([window.Termolog.buildCenedXml(cur.d, window.comuneInfo(cur.d.comune))], { type: 'application/xml' }), 'Termolog_' + baseName() + '.xml') }, '🧾  Scarica XML Termolog (sperimentale)'));
+    actions.append(h('button', { class: 'btn block', onclick: () => download(new Blob([buildXml()], { type: 'application/xml' }), baseName() + '.xml') }, '🗂  Scarica XML completo dell’app'));
     actions.append(h('button', { class: 'btn block', onclick: () => ov.remove() }, 'Chiudi'));
   } catch (e) {
     console.error(e);
