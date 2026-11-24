@@ -361,7 +361,19 @@ function importCatasto(cat) {
     await addMedia(cat, f); drawPanels(); await saveNow();
     if (f.type !== 'application/pdf') { toast('Immagine allegata. Per importare i dati serve il PDF: compila a mano.'); renderEditor(); return; }
     let found = {};
-    try { found = window.Catasto.parseCatasto(await window.Catasto.pdfText(f)); } catch (e) { found = {}; }
+    try {
+      const txt = await window.Catasto.pdfText(f);
+      found = window.Catasto.parseCatasto(txt);
+      const rr = window.Catasto.rows(txt);
+      if (rr.length) {
+        let pick = rr[0];
+        if (rr.length > 1) {
+          const n = parseInt(prompt('La visura contiene ' + rr.length + ' immobili. Quale vuoi importare? (scrivi il numero)\n\n' + rr.map((r, i) => (i + 1) + ') Fg ' + r.fg + ' Part. ' + r.mapp + (r.sub ? ' Sub ' + r.sub : '') + ' – cat. ' + r.categoria + (r.indirizzo ? ' – ' + r.indirizzo : '')).join('\n'), '1'), 10);
+          pick = rr[(n >= 1 && n <= rr.length ? n : 1) - 1];
+        }
+        found = Object.assign({}, found, pick);
+      }
+    } catch (e) { found = {}; }
     const keys = Object.keys(found);
     if (!keys.length) { toast('Allegato salvato, ma non riesco a leggere i dati (PDF scansionato?). Compila a mano.'); renderEditor(); return; }
     const diff = keys.filter(k => filled(cur.d[k]) && String(cur.d[k]).trim().toLowerCase() !== String(found[k]).toLowerCase());
