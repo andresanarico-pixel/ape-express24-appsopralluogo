@@ -3,7 +3,7 @@
 const VERSION = 'apexpress24-ape-v2';
 const ASSETS = [
   './', './index.html', './app.js', './style.css', './manifest.webmanifest',
-  './lib/jszip.min.js', './lib/jspdf.umd.min.js',
+  './lib/jszip.min.js', './lib/jspdf.umd.min.js', './lib/catasto.js', './lib/pdf.min.mjs', './lib/pdf.worker.min.mjs',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/logo.png', './icons/icon.svg'
 ];
 

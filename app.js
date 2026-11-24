@@ -22,6 +22,9 @@ const SCHEMA = [
     { l: 'Catasto / uso', f: [
       { k: 'fg', p: 'Foglio', cap: 'none' }, { k: 'mapp', p: 'Mappale', cap: 'none' },
       { k: 'sub', p: 'Sub.', cap: 'none' }, { k: 'piano', p: 'Piano / interno', cap: 'none' },
+      { k: 'categoria', p: 'Categoria catastale', cap: 'characters', up: 1 }, { k: 'classe', p: 'Classe', cap: 'characters', up: 1 },
+      { k: 'consistenza', p: 'Consistenza', cap: 'none' }, { k: 'sup_cat', p: 'Superficie catastale m²', im: 'decimal', cap: 'none' },
+      { k: 'rendita', p: 'Rendita (euro)', im: 'decimal', cap: 'none' }, { k: 'zona_cens', p: 'Zona censuaria', cap: 'none' },
       { k: 'destinazione', p: 'Destinazione d’uso' } ] },
     { l: 'Finalità / fabbricato', f: [
       { k: 'finalita', p: 'Finalità', t: 'radio', o: ['Vendita', 'Locazione', 'Fine lavori', 'Altro'], x: { k: 'finalita_altro', on: 'Altro', p: 'Specificare' } },
@@ -106,6 +109,8 @@ const STEPS = [
 
 const CATS = {
   doc:         { n: 'Documenti (visura, planimetria, APE…)', kind: 'doc',   f: 'Documenti' },
+  visura:      { n: 'Visura catastale',                      kind: 'doc',   f: 'Visura_catastale' },
+  planimetria: { n: 'Planimetria catastale',                 kind: 'doc',   f: 'Planimetria_catastale' },
   serramenti:  { n: 'Serramenti',                            kind: 'photo', f: 'Serramenti' },
   involucro:   { n: 'Facciate / involucro',                  kind: 'photo', f: 'Involucro' },
   targa_gen:   { n: 'Targa generatore',                      kind: 'photo', f: 'Targa_generatore' },
@@ -337,6 +342,37 @@ function geoPanel() {
     h('button', { class: 'btn small pri', onclick: () => rilevaPosizione(false) }, has ? '🔄 Aggiorna posizione' : '📍 Rileva posizione'));
 }
 
+/* ───────────── dati catastali da visura / planimetria ───────────── */
+const CAT_LABEL = { fg: 'Foglio', mapp: 'Mappale', sub: 'Sub.', categoria: 'Categoria', classe: 'Classe', consistenza: 'Consistenza', sup_cat: 'Superficie catastale m²', rendita: 'Rendita (euro)', zona_cens: 'Zona censuaria', piano: 'Piano', indirizzo: 'Indirizzo', comune: 'Comune' };
+function catastoPanel() {
+  const n = media.filter(m => m.cat === 'visura' || m.cat === 'planimetria').length;
+  return h('div', { class: 'row', style: 'padding:10px 14px' },
+    h('div', { class: 'rl' }, '📄 Dati catastali'),
+    h('p', { class: 'hint', style: 'margin:4px 0 8px' }, 'Carica la visura o la planimetria catastale (PDF): l’app legge Foglio, Mappale, Sub., categoria, superficie e rendita e li inserisce qui sotto. Controlla sempre i valori.' + (n ? ' Allegati già caricati: ' + n + '.' : '')),
+    h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
+      h('button', { class: 'btn small pri', onclick: () => importCatasto('visura') }, '📄 Carica visura'),
+      h('button', { class: 'btn small pri', onclick: () => importCatasto('planimetria') }, '📐 Carica planimetria')));
+}
+function importCatasto(cat) {
+  const inp = h('input', { type: 'file', accept: 'application/pdf,image/*' });
+  inp.addEventListener('change', async () => {
+    const f = inp.files[0]; if (!f) return;
+    toast('Leggo il documento…');
+    await addMedia(cat, f); drawPanels(); await saveNow();
+    if (f.type !== 'application/pdf') { toast('Immagine allegata. Per importare i dati serve il PDF: compila a mano.'); renderEditor(); return; }
+    let found = {};
+    try { found = window.Catasto.parseCatasto(await window.Catasto.pdfText(f)); } catch (e) { found = {}; }
+    const keys = Object.keys(found);
+    if (!keys.length) { toast('Allegato salvato, ma non riesco a leggere i dati (PDF scansionato?). Compila a mano.'); renderEditor(); return; }
+    const diff = keys.filter(k => filled(cur.d[k]) && String(cur.d[k]).trim().toLowerCase() !== String(found[k]).toLowerCase());
+    const over = diff.length ? confirm('Alcuni campi sono già compilati e sono diversi:\n' + diff.map(k => '• ' + CAT_LABEL[k] + ': ' + cur.d[k] + ' → ' + found[k]).join('\n') + '\n\nSovrascrivere con i dati del documento?') : false;
+    keys.forEach(k => { if (!filled(cur.d[k]) || over) cur.d[k] = found[k]; });
+    scheduleSave(); renderEditor();
+    toast('Importati: ' + keys.map(k => CAT_LABEL[k]).join(', ') + '. Controlla i valori.');
+  });
+  inp.click();
+}
+
 /* ───────────── Editor ───────────── */
 function visible(f) { return !f.if || f.if(cur.d); }
 function stepStats(st) {
@@ -372,7 +408,7 @@ function stepMenu() {
 function renderEditor() {
   panels.length = 0;
   const st = STEPS[step], last = !!st.final;
-  const body = last ? finalStep() : h('section', { class: 'sec' }, step === 1 ? geoPanel() : null, ...st.rows.map(r => r.media ? mediaPanel(r.media) : renderRow(r)));
+  const body = last ? finalStep() : h('section', { class: 'sec' }, step === 1 ? geoPanel() : null, step === 1 ? catastoPanel() : null, ...st.rows.map(r => r.media ? mediaPanel(r.media) : renderRow(r)));
   app.replaceChildren(
     h('div', { class: 'hdr' },
       h('button', { class: 'ibtn', 'aria-label': 'Torna all’elenco', onclick: async () => { await saveNow(); renderHome(); } }, '‹ Elenco'),
@@ -588,10 +624,39 @@ async function buildZip(onProg) {
       n++;
     });
   }
+  zip.file(root + '/dati_pratica.xml', buildXml());
   zip.file(root + '/dati_pratica.json', JSON.stringify(json, null, 2));
   zip.file(root + '/dati_pratica.csv', csv);
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 }, streamFiles: true },
     meta => onProg(10 + meta.percent * 0.9, 'Compressione allegati… ' + Math.round(meta.percent) + '%'));
+}
+
+
+/* ───────────── XML per Termolog / altri software ───────────── */
+const xe = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c])).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+function buildXml() {
+  const d = cur.d, t = (tag, v, attrs) => '<' + tag + (attrs || '') + '>' + xe(v) + '</' + tag + '>';
+  const L = [];
+  L.push('<?xml version="1.0" encoding="UTF-8"?>');
+  L.push('<sopralluogoAPE formato="apexpress24-ape-v1" generato="' + xe(new Date().toISOString()) + '">');
+  L.push(' <richiedente>', '  ' + t('nome', d.nome), '  ' + t('cognome', d.cognome), '  ' + t('codiceFiscalePartitaIva', d.cf), '  ' + t('telefono', d.tel), '  ' + t('email', d.email), ' </richiedente>');
+  L.push(' <immobile>', '  ' + t('indirizzo', d.indirizzo), '  ' + t('comune', d.comune), '  ' + t('provincia', d.prov), '  ' + t('cap', d.cap),
+    '  ' + t('finalita', d.finalita === 'Altro' && d.finalita_altro ? d.finalita_altro : d.finalita), '  ' + t('annoCostruzione', d.anno_costr),
+    '  ' + t('tipologia', d.tipologia === 'Altro' && d.tipologia_altro ? d.tipologia_altro : d.tipologia), '  ' + t('posizione', d.posizione), '  ' + t('destinazioneUso', d.destinazione), '  ' + t('piano', d.piano));
+  L.push('  <catasto>', '   ' + t('foglio', d.fg), '   ' + t('mappale', d.mapp), '   ' + t('subalterno', d.sub), '   ' + t('categoria', d.categoria), '   ' + t('classe', d.classe),
+    '   ' + t('consistenza', d.consistenza), '   ' + t('superficieCatastaleMq', d.sup_cat), '   ' + t('renditaEuro', d.rendita), '   ' + t('zonaCensuaria', d.zona_cens), '  </catasto>', ' </immobile>');
+  L.push(' <sopralluogo>', '  ' + t('dataOra', d.data_sopralluogo), '  ' + t('latitudine', d.geo_lat), '  ' + t('longitudine', d.geo_lon), '  ' + t('precisioneMetri', d.geo_acc), '  ' + t('indirizzoRilevato', d.geo_indirizzo), '  ' + t('dataFirma', d.data_firma), ' </sopralluogo>');
+  L.push(' <schedaCompleta>');
+  SCHEMA.forEach(sec => {
+    L.push('  <sezione id="' + xe(sec.id) + '" titolo="' + xe(sec.t) + '">');
+    sec.rows.forEach(r => (r.f || []).forEach(f => {
+      const v = d[f.k]; if (!filled(v)) return;
+      L.push('   ' + t('campo', isArr(v) ? v.join('; ') : v, ' chiave="' + xe(f.k) + '" etichetta="' + xe(f.p) + '"'));
+    }));
+    L.push('  </sezione>');
+  });
+  L.push(' </schedaCompleta>', '</sopralluogoAPE>');
+  return L.join('\n');
 }
 
 async function buildPdf() {
@@ -737,7 +802,7 @@ async function openExport() {
   const actions = h('div', { style: 'display:grid;gap:10px;margin-top:8px' });
   const ov = h('div', { class: 'overlay', onclick: e => { if (e.target === ov) ov.remove(); } },
     h('div', { class: 'sheet' }, h('h3', {}, 'Pacchetto per il certificatore'),
-      h('p', { class: 'hint', style: 'margin:0' }, 'Contiene la scheda PDF compilata, i dati (JSON e CSV) e tutti gli allegati in cartelle ordinate.'),
+      h('p', { class: 'hint', style: 'margin:0' }, 'Contiene la scheda PDF compilata, i dati (XML, JSON e CSV) e tutti gli allegati in cartelle ordinate.'),
       h('div', { class: 'pbar' }, bar), msg, actions));
   document.body.append(ov);
   try {
@@ -750,6 +815,7 @@ async function openExport() {
     if (canShare) actions.append(h('button', { class: 'btn pri block', onclick: async () => { try { await navigator.share({ files: [file], title: 'Scheda APE – ' + title(cur) }); } catch (e) { if (e.name !== 'AbortError') toast('Condivisione non riuscita: usa Scarica'); } } }, '📤  Invia / Condividi (mail, WhatsApp, AirDrop, Drive…)'));
     actions.append(h('button', { class: 'btn block' + (canShare ? '' : ' pri'), onclick: () => download(blob, name) }, '⬇️  Scarica ZIP'));
     actions.append(h('button', { class: 'btn block', onclick: async () => { const pdf = await buildPdf(); download(pdf, baseName() + '_scheda.pdf'); } }, '📄  Scarica solo la scheda PDF'));
+    actions.append(h('button', { class: 'btn block', onclick: () => download(new Blob([buildXml()], { type: 'application/xml' }), baseName() + '.xml') }, '🧾  Scarica solo l’XML (Termolog)'));
     actions.append(h('button', { class: 'btn block', onclick: () => ov.remove() }, 'Chiudi'));
   } catch (e) {
     console.error(e);
