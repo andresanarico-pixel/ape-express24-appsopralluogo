@@ -63,6 +63,8 @@ const SCHEMA = [
     { l: 'Dati generatore', f: [
       { k: 'gen_marca', p: 'Marca / modello', cap: 'words' },
       { k: 'gen_anno', p: 'Anno', im: 'numeric', cap: 'none' },
+      { k: 'gen_kw', p: 'Potenza nominale (kW)', im: 'decimal', cap: 'none' },
+      { k: 'gen_cond', p: 'Caldaia a condensazione?', t: 'radio', o: ['Sì', 'No', 'Non noto'], if: d => d.gen === 'Caldaia' },
       { k: 'gen_comb', p: 'Combustibile' } ] },
     { l: 'Terminali / ACS', f: [
       { k: 'term', p: 'Terminali', t: 'multi', o: ['Radiatori', 'Radiante', 'Fan-coil'] },
@@ -390,6 +392,36 @@ function importCatasto(cat) {
   inp.click();
 }
 
+/* ───────────── dati impianto da libretto / scheda CURIT ───────────── */
+const LIB_LABEL = { curit: 'Codice CURIT', gen_marca: 'Marca / modello', gen_anno: 'Anno', gen_kw: 'Potenza (kW)', gen_comb: 'Combustibile', gen_cond: 'Condensazione' };
+function librettoPanel() {
+  const n = media.filter(m => m.cat === 'libretto').length;
+  return h('div', { class: 'row', style: 'padding:10px 14px' },
+    h('div', { class: 'rl' }, '📘 Libretto di impianto / CURIT'),
+    h('p', { class: 'hint', style: 'margin:4px 0 8px' }, 'Carica il libretto (o la stampa del libretto dal CURIT) in PDF: l’app legge targa, marca/modello, anno, potenza e combustibile. La condensazione va controllata sul libretto. Controlla sempre i valori.' + (n ? ' Allegati già caricati: ' + n + '.' : '')),
+    h('button', { class: 'btn small pri', onclick: importLibretto }, '📘 Carica libretto (PDF)'));
+}
+function importLibretto() {
+  const inp = h('input', { type: 'file', accept: 'application/pdf,image/*' });
+  inp.addEventListener('change', async () => {
+    const f = inp.files[0]; if (!f) return;
+    toast('Leggo il libretto…');
+    await addMedia('libretto', f); drawPanels(); await saveNow();
+    if (f.type !== 'application/pdf') { toast('Immagine allegata. Per importare i dati serve il PDF: compila a mano.'); renderEditor(); return; }
+    let found = {};
+    try { found = window.Libretto.parseLibretto(await window.Catasto.pdfText(f, 40)); } catch (e) { found = {}; }
+    const keys = Object.keys(found);
+    if (!keys.length) { toast('Allegato salvato, ma il PDF non ha testo leggibile (scansione?). Compila a mano o carica la stampa dal CURIT.'); renderEditor(); return; }
+    const diff = keys.filter(k => filled(cur.d[k]) && String(cur.d[k]).trim().toLowerCase() !== String(found[k]).toLowerCase());
+    const over = diff.length ? confirm('Alcuni campi sono già compilati e sono diversi:\n' + diff.map(k => '• ' + LIB_LABEL[k] + ': ' + cur.d[k] + ' → ' + found[k]).join('\n') + '\n\nSovrascrivere con i dati del libretto?') : false;
+    keys.forEach(k => { if (!filled(cur.d[k]) || over) cur.d[k] = found[k]; });
+    if (found.curit && !filled(cur.d.gen)) cur.d.gen = 'Caldaia';
+    scheduleSave(); renderEditor();
+    toast('Importati: ' + keys.map(k => LIB_LABEL[k]).join(', ') + '. Controlla i valori.');
+  });
+  inp.click();
+}
+
 /* ───────────── Editor ───────────── */
 function visible(f) { return !f.if || f.if(cur.d); }
 function stepStats(st) {
@@ -425,7 +457,7 @@ function stepMenu() {
 function renderEditor() {
   panels.length = 0;
   const st = STEPS[step], last = !!st.final;
-  const body = last ? finalStep() : h('section', { class: 'sec' }, step === 1 ? geoPanel() : null, step === 1 ? catastoPanel() : null, ...st.rows.map(r => r.media ? mediaPanel(r.media) : renderRow(r)));
+  const body = last ? finalStep() : h('section', { class: 'sec' }, step === 1 ? geoPanel() : null, step === 1 ? catastoPanel() : null, st.t === 'Riscaldamento e generatore' ? librettoPanel() : null, ...st.rows.map(r => r.media ? mediaPanel(r.media) : renderRow(r)));
   app.replaceChildren(
     h('div', { class: 'hdr' },
       h('button', { class: 'ibtn', 'aria-label': 'Torna all’elenco', onclick: async () => { await saveNow(); renderHome(); } }, '‹ Elenco'),
